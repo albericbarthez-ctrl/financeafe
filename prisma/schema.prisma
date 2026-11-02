@@ -1,0 +1,168 @@
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum Role {
+  FOUNDER
+  ADMIN
+  USER
+}
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+}
+enum TxType {
+  INCOME
+  EXPENSE
+  SAVINGS_ADD
+  SAVINGS_REDUCE
+}
+enum CategoryKind {
+  INCOME
+  EXPENSE
+  SAVINGS
+}
+enum GoalStatus {
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+model User {
+  id        String        @id            // = Supabase auth user id
+  email     String        @unique
+  username  String        @unique
+  fullName  String
+  role      Role          @default(USER)
+  status    AccountStatus @default(ACTIVE)
+  createdAt DateTime      @default(now())
+  profile   UserProfile?
+  wallet    Wallet?
+  notif     NotificationPreference?
+  categories Category[]
+  transactions FinancialTransaction[]
+  goals     SavingsGoal[]
+  activity  ActivityLog[]
+  sessions  UserSession[]
+}
+
+model UserProfile {
+  userId    String  @id
+  avatarUrl String?
+  bio       String?
+  theme     String  @default("dark")
+  reducedMotion Boolean @default(false)
+  displayMode String @default("fullName")
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// Satu-satunya sumber saldo. Hanya diubah oleh services/ledger.ts di dalam DB transaction.
+model Wallet {
+  userId  String  @id
+  balance Decimal @default(0) @db.Decimal(18, 2) // kas tersedia (di luar tabungan)
+  savings Decimal @default(0) @db.Decimal(18, 2)
+  updatedAt DateTime @updatedAt
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Category {
+  id     String       @id @default(cuid())
+  userId String?      // null = kategori bawaan sistem
+  name   String
+  kind   CategoryKind
+  user   User?        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  txs    FinancialTransaction[]
+  @@unique([userId, name, kind])
+}
+
+model FinancialTransaction {
+  id            String   @id @default(cuid())
+  userId        String
+  type          TxType
+  amount        Decimal  @db.Decimal(18, 2)
+  categoryId    String?
+  source        String?
+  reason        String?
+  description   String?
+  occurredAt    DateTime
+  goalId        String?
+  balanceBefore Decimal  @db.Decimal(18, 2)
+  balanceAfter  Decimal  @db.Decimal(18, 2)
+  savingsBefore Decimal  @db.Decimal(18, 2)
+  savingsAfter  Decimal  @db.Decimal(18, 2)
+  createdAt     DateTime @default(now())
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category      Category? @relation(fields: [categoryId], references: [id])
+  goal          SavingsGoal? @relation(fields: [goalId], references: [id], onDelete: SetNull)
+  @@index([userId, occurredAt])
+  @@index([userId, type])
+}
+
+model SavingsGoal {
+  id           String     @id @default(cuid())
+  userId       String
+  name         String
+  targetAmount Decimal    @db.Decimal(18, 2)
+  currentAmount Decimal   @default(0) @db.Decimal(18, 2)
+  deadline     DateTime?
+  description  String?
+  status       GoalStatus @default(ACTIVE)
+  createdAt    DateTime   @default(now())
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  txs          FinancialTransaction[]
+  @@index([userId])
+}
+
+// Log aktivitas: boleh dihapus pengguna. TIDAK menyentuh transaksi/saldo.
+model ActivityLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  category  String
+  action    String
+  metadata  Json?
+  ip        String?
+  createdAt DateTime @default(now())
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  @@index([userId, createdAt])
+}
+
+// Audit log keamanan: append-only. Tidak ada endpoint hapus untuk User/Admin.
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  targetId  String?
+  action    String
+  detail    Json?
+  createdAt DateTime @default(now())
+  @@index([createdAt])
+}
+
+model UserSession {
+  id        String   @id @default(cuid())
+  userId    String
+  userAgent String?
+  ip        String?
+  createdAt DateTime @default(now())
+  lastSeen  DateTime @default(now())
+  revokedAt DateTime?
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model NotificationPreference {
+  userId    String  @id
+  financial Boolean @default(true)
+  savings   Boolean @default(true)
+  security  Boolean @default(true)
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model SystemSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
